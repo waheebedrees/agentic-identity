@@ -1,0 +1,34 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.log 
+log.log 
+spire/x509pop/*.key
+spire/x509pop/*.srl
+spire/x509pop/*.csr
+svid/
+.env 
+
+# Private keys — never commit
+spire/x509pop/ca.key
+spire/x509pop/agent.key
+
+# Generated cert artifacts (regenerable from CSR)
+spire/x509pop/agent.csr
+spire/x509pop/ca.srl
+
+# Runtime state
+svid/
+spire/bootstrap.crt
+log.log
+init.sh
+# Python
+__pycache__/
+.venv/
