@@ -1,29 +1,33 @@
-# ─────────────────────────────────────────────────────────────────
-# SPIRE x509pop + workload identity
-# ─────────────────────────────────────────────────────────────────
+
+# agentic-identity Makefile
 
 SHELL        := /bin/bash
 COMPOSE      := docker compose
 SPIRE_SERVER := /opt/spire/bin/spire-server
 SPIRE_AGENT  := /opt/spire/bin/spire-agent
 
-# ── Parameters (override on the CLI) ─────────────────────────────
-SPIFFE_ID  ?= spiffe://acme.test/my-agent
-SELECTOR   ?= unix:uid:0
-SVID_DIR   ?= ./svid
-SOCKET     ?= /tmp/spire-agent/public/api.sock
-VOL_AGENT  ?= agentic-identity_spire-agent-data
+# Load .env if present
+-include .env
+export
+
+# Host paths (used by Make and by Compose as bind-mount sources)
+SVID_HOST_DIR ?= $(SVID_HOST_DIR)
+VOL_AGENT ?= $(AGENT_DATA_VOLUME)
+
+# Parameters with defaults (override with .env or CLI)
+SOCKET ?= $(SPIRE_SOCKET_PATH)
+
+SPIFFE_ID  ?= $(SPIFFE_ID)
+SELECTOR   ?= $(SELECTOR)
 
 .PHONY: help up down nuke restart logs status \
         certs bundle volume register unregister entries \
         fetch show fingerprint clean clean-certs
 
-help: ## Show this help
+help:
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# ── Lifecycle ────────────────────────────────────────────────────
-
-up: bundle ## Start the stack and wait for attestation
+up: bundle
 	$(COMPOSE) up -d
 	@echo ">> waiting for spire-agent to attest..."
 	@for i in $$(seq 1 30); do \
@@ -38,34 +42,30 @@ up: bundle ## Start the stack and wait for attestation
 	  sleep 1; \
 	done
 
-down: ## Stop the stack, keep volumes
+down:
 	$(COMPOSE) down
 
-nuke: ## Stop the stack and delete all volumes
+nuke:
 	$(COMPOSE) down -v
 	@docker volume rm $(VOL_AGENT) 2>/dev/null || true
-	rm -rf $(SVID_DIR)
+	rm -rf $(SVID_HOST_DIR)
 	@echo ">> nuked"
 
-restart: ## Restart the agent only
+restart:
 	$(COMPOSE) restart spire-agent
 
-logs: ## Tail server and agent logs
+logs:
 	$(COMPOSE) logs -f spire-server spire-agent
 
-status: ## Show container status
+status:
 	$(COMPOSE) ps
 
-# ── Volume prep ──────────────────────────────────────────────────
-
-volume: ## Ensure the agent data volume exists
+volume:
 	@docker volume inspect $(VOL_AGENT) >/dev/null 2>&1 \
 	  || docker volume create $(VOL_AGENT) >/dev/null
 	@echo "   volume $(VOL_AGENT) ready"
 
-# ── Certificates ─────────────────────────────────────────────────
-
-certs: ## Generate CA + agent cert/key into ./spire/x509pop
+certs:
 	@bash -c 'set -e; \
 	  export MSYS_NO_PATHCONV=1; \
 	  mkdir -p ./spire/x509pop; cd ./spire/x509pop; \
@@ -89,10 +89,8 @@ certs: ## Generate CA + agent cert/key into ./spire/x509pop
 	  echo ">> verifying"; \
 	  openssl verify -CAfile ca.crt agent.crt; \
 	  openssl x509 -in agent.crt -noout -text | grep -A1 "Key Usage"'
-	
-# ── Trust bundle ─────────────────────────────────────────────────
 
-bundle: volume ## Fetch the server trust bundle into the agent volume
+bundle: volume
 	@$(COMPOSE) up -d spire-init spire-server >/dev/null
 	@echo ">> waiting for spire-server health..."
 	@ok=0; \
@@ -113,12 +111,10 @@ bundle: volume ## Fetch the server trust bundle into the agent volume
 	      alpine sh -c 'cat > /data/bootstrap.crt'
 	@echo "   wrote bootstrap.crt into $(VOL_AGENT)"
 
-# ── Workload registration ────────────────────────────────────────
-
-fingerprint: ## Print the agent's current x509pop fingerprint
+fingerprint:
 	@$(COMPOSE) logs spire-agent 2>&1 | grep -o 'x509pop/[a-f0-9]*' | head -1 | cut -d/ -f2
 
-register: ## Register the workload (SPIFFE_ID=... SELECTOR=...)
+register:
 	@FP=$$($(COMPOSE) logs spire-agent 2>&1 | grep -o 'x509pop/[a-f0-9]*' | head -1 | cut -d/ -f2); \
 	if [ -z "$$FP" ]; then \
 	  echo "!! agent has no fingerprint — run 'make up' first"; \
@@ -130,32 +126,29 @@ register: ## Register the workload (SPIFFE_ID=... SELECTOR=...)
 	  -selector  $(SELECTOR); \
 	echo ">> registered $(SPIFFE_ID) with selector $(SELECTOR)"
 
-unregister: ## Delete the workload entry by SPIFFE_ID
+unregister:
 	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) entry delete \
 	  -spiffeID $(SPIFFE_ID)
 	@echo ">> deleted $(SPIFFE_ID)"
 
-entries: ## List registered entries
+entries:
 	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) entry show
 
-# ── SVID fetch ───────────────────────────────────────────────────
-
-fetch: ## Fetch an X.509 SVID into $(SVID_DIR)
-	@mkdir -p $(SVID_DIR)
+fetch:
+	@mkdir -p $(SVID_HOST_DIR)
 	@$(COMPOSE) exec spire-agent $(SPIRE_AGENT) api fetch x509 \
 	  -socketPath $(SOCKET) \
 	  -write /svid
-	@echo ">> SVID written to $(SVID_DIR)"
+	@echo ">> SVID written to $(SVID_HOST_DIR)"
 
-show: ## Print the SPIFFE ID from the fetched SVID
-	@openssl x509 -in $(SVID_DIR)/svid.0.pem -noout -text | grep -A1 "Subject Alternative Name"
+show:
+	@openssl x509 -in $(SVID_HOST_DIR)/svid.0.pem -noout -text \
+	  | grep -A1 "Subject Alternative Name"
 
-# ── Cleanup ──────────────────────────────────────────────────────
+clean:
+	rm -rf $(SVID_HOST_DIR)
+	@echo ">> cleaned $(SVID_HOST_DIR)"
 
-clean: ## Remove generated SVIDs
-	rm -rf $(SVID_DIR)
-	@echo ">> cleaned $(SVID_DIR)"
-
-clean-certs: ## Remove all generated certificates
+clean-certs:
 	rm -rf ./spire/x509pop
 	@echo ">> removed ./spire/x509pop"

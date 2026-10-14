@@ -82,17 +82,7 @@ The goal is not to replace the 4 protocols — they are necessary infrastructure
 
 > 🚧 **Work in progress** — architecture and prototyping phase.
 
-```bash
-# Clone
-git clone https://github.com/<your-org>/agentic-identity.git
-cd agentic-identity
 
-# Python environment
-python -m venv .venv && source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-pip install -e .
-
-# Run
-python main.py
 ```
 
 ## License

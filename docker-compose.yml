@@ -21,22 +21,44 @@ services:
       - ./spire/x509pop/ca.crt:/opt/spire/conf/server/x509pop-ca.crt:ro 
       - spire-server-data:/opt/spire/data/server
       - spire-server-socket:/tmp/spire-server/private
+
   spire-agent:
     image: ghcr.io/spiffe/spire-agent:1.14.4
     hostname: spire-agent
     pid: "host"
-    
     command: ["-config", "/opt/spire/conf/agent/agent.conf"]
     volumes:
       - ./spire/agent.conf:/opt/spire/conf/agent/agent.conf:ro
       - ./spire/x509pop/agent.crt:/etc/spire/agent.crt:ro
-      - ./spire/x509pop/agent.key:/etc/spire/agent.key:ro
-      - ./svid:/svid 
-      
+      - ./spire/x509pop/agent.key:/etc/spire/agent.key:ro                             
       - spire-agent-data:/opt/spire/data/agent
-
+      - ${SVID_HOST_DIR}:/svid   
     depends_on:
       - spire-server
+
+  attestor:
+    build: .
+    volumes:
+      - spire-agent-socket:/tmp/spire-agent/public:ro
+      - ./svid:/svid
+      - ./attest:/attest
+    environment:
+      
+      # SPIFFE_ENDPOINT_SOCKET: ${SPIFFE_ENDPOINT_SOCKET} 
+      SPIFFE_ENDPOINT_SOCKET: /tmp/spire-agent/public/api.sock
+      SVID_DIR: ${SVID_CONTAINER_DIR}
+      ATTEST_DIR: ${ATTEST_CONTAINER_DIR}
+      MODEL_ID: ${MODEL_ID}
+      MODEL_VERSION: ${MODEL_VERSION}
+      SYSTEM_PROMPT: ${SYSTEM_PROMPT}
+      TOOLS_JSON: ${TOOLS_JSON}
+      POLICY_VERSION: ${POLICY_VERSION}
+      ATTEST_INTERVAL_SECONDS: ${ATTEST_INTERVAL_SECONDS}
+      TARGET_URL: ${TARGET_URL}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      spire-agent:
+          condition: service_started
 
 volumes:
   spire-server-data:
