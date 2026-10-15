@@ -32,3 +32,26 @@ init.sh
 # Python
 __pycache__/
 .venv/
+
+spire/x509pop/*.key
+spire/x509pop/*.csr
+spire/x509pop/*.srl
+
+svid/
+spire/bootstrap.crt
+spire/agent-data.json
+spire/server-data.json
+
+# Local environment files often contain secrets.
+.env
+.env.*
+
+# --- Logs & Temporary Files ---
+*.log
+log.log
+*.tmp
+*~spire/x509pop/*.key
+spire/x509pop/*.crt
+spire/x509pop/*.csr
+spire/x509pop/*.srl
+svid/

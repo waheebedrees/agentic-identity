@@ -44,8 +44,7 @@ services:
       - ./attest:/attest
     environment:
       
-      # SPIFFE_ENDPOINT_SOCKET: ${SPIFFE_ENDPOINT_SOCKET} 
-      SPIFFE_ENDPOINT_SOCKET: /tmp/spire-agent/public/api.sock
+      SPIFFE_ENDPOINT_SOCKET: ${SPIFFE_ENDPOINT_SOCKET} 
       SVID_DIR: ${SVID_CONTAINER_DIR}
       ATTEST_DIR: ${ATTEST_CONTAINER_DIR}
       MODEL_ID: ${MODEL_ID}
