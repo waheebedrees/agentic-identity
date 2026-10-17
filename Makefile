@@ -1,156 +1,37 @@
-
 # agentic-identity Makefile
 
 SHELL        := /bin/bash
 COMPOSE      := docker compose
 SPIRE_SERVER := /opt/spire/bin/spire-server
-SPIRE_AGENT  := /opt/spire/bin/spire-agent
 
-# Load .env if present
+# Load .env if present (exports all vars to recipes)
 -include .env
 export
 export MSYS_NO_PATHCONV=1
 
-# Host paths (used by Make and by Compose as bind-mount sources)
-SVID_HOST_DIR ?= $(SVID_HOST_DIR)
+# Docker volume holding the agent's SVID and bootstrap bundle
 VOL_AGENT ?= $(AGENT_DATA_VOLUME)
 
-# Parameters with defaults (override with .env or CLI)
-SOCKET ?= $(SPIRE_SOCKET_PATH)
+# Generator and registration script paths
+GEN_SCRIPT := scripts/gen.py
+REG_SCRIPT := scripts/register-entries.sh
 
-SPIFFE_ID  ?= $(SPIFFE_ID)
-SELECTOR   ?= $(SELECTOR)
+.PHONY: help gen build certs volume bundle up down nuke restart \
+        logs status list entries fingerprint clean-certs run
 
-.PHONY: help up down nuke restart logs status \
-        certs bundle volume register unregister entries \
-        fetch show fingerprint clean clean-certs
-
+# Show available targets with their descriptions
 help:
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-up: bundle
-	$(COMPOSE) up -d
-	@echo ">> waiting for spire-agent to attest..."
-	@for i in $$(seq 1 30); do \
-	  if $(COMPOSE) logs spire-agent 2>&1 | grep -q "Starting Workload and SDS APIs"; then \
-	    echo "   attested"; break; \
-	  fi; \
-	  if [ "$$i" -eq 30 ]; then \
-	    echo "!! agent never attested"; \
-	    $(COMPOSE) logs --tail=30 spire-agent; \
-	    exit 1; \
-	  fi; \
-	  sleep 1; \
-	done
+# Regenerate docker-compose.yml and register-entries.sh from agents.yaml
+gen:
+	python $(GEN_SCRIPT)
 
-down:
-	$(COMPOSE) down
+# Build per-agent images (manager, worker, ...)
+build: gen
+	$(COMPOSE) build
 
-nuke:
-	$(COMPOSE) down -v
-	@docker volume rm $(VOL_AGENT) 2>/dev/null || true
-	rm -rf $(SVID_HOST_DIR)
-	@echo ">> nuked"
-
-restart:
-	$(COMPOSE) restart spire-agent
-
-logs:
-	$(COMPOSE) logs -f spire-server spire-agent
-
-status:
-	$(COMPOSE) ps
-
-volume:
-	@docker volume inspect $(VOL_AGENT) >/dev/null 2>&1 \
-	  || docker volume create $(VOL_AGENT) >/dev/null
-	@echo "   volume $(VOL_AGENT) ready"
-
-fingerprint:
-	@$(COMPOSE) logs spire-agent 2>&1 | grep -o 'x509pop/[a-f0-9]*' | head -1 | cut -d/ -f2
-
-register:
-	@FP=$$($(COMPOSE) logs spire-agent 2>&1 | grep -o 'x509pop/[a-f0-9]*' | head -1 | cut -d/ -f2); \
-	if [ -z "$$FP" ]; then \
-	  echo "!! agent has no fingerprint — run 'make up' first"; \
-	  exit 1; \
-	fi; \
-	$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) entry create \
-	  -spiffeID  $(SPIFFE_ID) \
-	  -parentID  spiffe://acme.test/spire/agent/x509pop/$$FP \
-	  -selector  $(SELECTOR); \
-	echo ">> registered $(SPIFFE_ID) with selector $(SELECTOR)"
-
-unregister:
-	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) entry delete \
-	  -spiffeID $(SPIFFE_ID)
-	@echo ">> deleted $(SPIFFE_ID)"
-
-entries:
-	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) entry show
-
-show:
-	@openssl x509 -in $(SVID_HOST_DIR)/svid.0.pem -noout -text \
-	  | grep -A1 "Subject Alternative Name"
-
-clean:
-	rm -rf $(SVID_HOST_DIR)
-	@echo ">> cleaned $(SVID_HOST_DIR)"
-
-clean-certs:
-	rm -rf ./spire/x509pop
-	@echo ">> removed ./spire/x509pop"
-
-bundle: volume
-	@$(COMPOSE) up -d spire-init spire-server >/dev/null
-	@echo ">> waiting for spire-server health..."
-	@ok=0; \
-	for i in $$(seq 1 60); do \
-	  if $(COMPOSE) logs spire-server 2>&1 | grep -q "Starting Server APIs"; then \
-	    ok=1; break; \
-	  fi; \
-	  sleep 1; \
-	done; \
-	if [ "$$ok" -ne 1 ]; then \
-	  echo "!! server never became ready"; \
-	  $(COMPOSE) logs --tail=30 spire-server; \
-	  exit 1; \
-	fi; \
-	echo "   ready"
-	@rm -rf ./spire/bootstrap.crt
-	@mkdir -p ./spire
-	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) bundle show -format pem > ./spire/bootstrap.crt
-	@if [ ! -s ./spire/bootstrap.crt ]; then \
-	  echo "!! bootstrap.crt is empty"; \
-	  exit 1; \
-	fi
-	@echo "   fetched $$(wc -c < ./spire/bootstrap.crt) bytes"
-	@docker run --rm \
-	  -v $(VOL_AGENT):/data \
-	  -v "$$(pwd)/spire:/src:ro" \
-	  alpine sh -c 'cp /src/bootstrap.crt /data/bootstrap.crt'
-	@echo "   copied into $(VOL_AGENT)"
-
-
-fetch:
-	@mkdir -p $(SVID_HOST_DIR)
-	@ok=0; \
-	for i in $$(seq 1 10); do \
-	  if $(COMPOSE) exec spire-agent $(SPIRE_AGENT) api fetch x509 \
-	       -socketPath $(SPIRE_SOCKET_PATH) -write /svid >/dev/null 2>&1; then \
-	    ok=1; break; \
-	  fi; \
-	  echo "   waiting for entry to propagate ($$i/10)..."; \
-	  sleep 2; \
-	done; \
-	if [ "$$ok" -ne 1 ]; then \
-	  echo "!! fetch failed after 10 attempts"; \
-	  $(COMPOSE) exec spire-agent $(SPIRE_AGENT) api fetch x509 \
-	    -socketPath $(SPIRE_SOCKET_PATH) -write /svid; \
-	  exit 1; \
-	fi; \
-	echo ">> SVID written to $(SVID_HOST_DIR)"
-
+# Generate x509pop CA and agent certificate for node attestation
 certs:
 	@bash -c 'set -e; \
 	  export MSYS_NO_PATHCONV=1; \
@@ -178,6 +59,100 @@ certs:
 	  openssl verify -CAfile ca.crt agent.crt; \
 	  openssl x509 -in agent.crt -noout -text | grep -A1 "Key Usage"'
 
-run: nuke certs up register fetch
-	$(COMPOSE) up -d --force-recreate attestor
-	$(COMPOSE) logs -f attestor
+# Ensure the agent data volume exists
+volume:
+	@docker volume inspect $(VOL_AGENT) >/dev/null 2>&1 \
+	  || docker volume create $(VOL_AGENT) >/dev/null
+	@echo "   volume $(VOL_AGENT) ready"
+
+# Fetch trust bundle from the server and copy it into the agent data volume
+bundle: volume
+	@$(COMPOSE) up -d spire-init spire-server >/dev/null
+	@echo ">> waiting for spire-server health..."
+	@ok=0; \
+	for i in $$(seq 1 60); do \
+	  if $(COMPOSE) logs spire-server 2>&1 | grep -q "Starting Server APIs"; then \
+	    ok=1; break; \
+	  fi; \
+	  sleep 1; \
+	done; \
+	if [ "$$ok" -ne 1 ]; then \
+	  echo "!! server never became ready"; \
+	  $(COMPOSE) logs --tail=30 spire-server; \
+	  exit 1; \
+	fi; \
+	echo "   ready"
+	@rm -f ./spire/bootstrap.crt
+	@mkdir -p ./spire
+	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) bundle show -format pem > ./spire/bootstrap.crt
+	@if [ ! -s ./spire/bootstrap.crt ]; then \
+	  echo "!! bootstrap.crt is empty"; \
+	  exit 1; \
+	fi
+	@echo "   fetched $$(wc -c < ./spire/bootstrap.crt) bytes"
+	@docker run --rm \
+	  -v $(VOL_AGENT):/data \
+	  -v "$$(pwd)/spire:/src:ro" \
+	  alpine sh -c 'cp /src/bootstrap.crt /data/bootstrap.crt'
+	@echo "   copied into $(VOL_AGENT)"
+
+# Start SPIRE infra (init, server, agent) and wait for attestation
+up: bundle
+	$(COMPOSE) up -d spire-init spire-server spire-agent
+	@echo ">> waiting for spire-agent to attest..."
+	@for i in $$(seq 1 30); do \
+	  if $(COMPOSE) logs spire-agent 2>&1 | grep -q "Starting Workload and SDS APIs"; then \
+	    echo "   attested"; break; \
+	  fi; \
+	  if [ "$$i" -eq 30 ]; then \
+	    echo "!! agent never attested"; \
+	    $(COMPOSE) logs --tail=30 spire-agent; \
+	    exit 1; \
+	  fi; \
+	  sleep 1; \
+	done
+
+# Stop all services, keep volumes
+down:
+	$(COMPOSE) down
+
+# Stop all services and remove volumes — full reset
+nuke:
+	$(COMPOSE) down -v
+	@docker volume rm $(VOL_AGENT) 2>/dev/null || true
+	@echo ">> nuked"
+
+# Restart the SPIRE agent
+restart:
+	$(COMPOSE) restart spire-agent
+
+# Follow logs for spire-server and spire-agent
+logs:
+	$(COMPOSE) logs -f spire-server spire-agent
+
+# Show running containers
+status:
+	$(COMPOSE) ps
+
+# Print the agent's x509pop fingerprint
+fingerprint:
+	@$(COMPOSE) logs spire-agent 2>&1 | grep -o 'x509pop/[a-f0-9]*' | head -1 | cut -d/ -f2
+
+# List attested agents
+list:
+	$(COMPOSE) exec spire-server $(SPIRE_SERVER) agent list
+
+# Show all registration entries
+entries:
+	@$(COMPOSE) exec -T spire-server $(SPIRE_SERVER) entry show
+
+# Remove generated x509pop CA and agent certs
+clean-certs:
+	rm -rf ./spire/x509pop
+	@echo ">> removed ./spire/x509pop"
+
+# Full workflow: clean slate, build images, start infra, register, run workloads
+run: nuke build certs up
+	./$(REG_SCRIPT)
+	$(COMPOSE) up -d manager worker
+	$(COMPOSE) logs -f manager worker

@@ -2,7 +2,7 @@ import json
 import pathlib
 import yaml
 
-ROOT = pathlib.Path(__file__).parent
+ROOT = pathlib.Path(__file__).parent.parent
 CFG = yaml.safe_load((ROOT / "agents.yaml").read_text(encoding="utf-8"))
 TD = CFG["trust_domain"]
 DEF = CFG.get("defaults", {})
