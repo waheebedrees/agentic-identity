@@ -55,3 +55,4 @@ spire/x509pop/*.crt
 spire/x509pop/*.csr
 spire/x509pop/*.srl
 svid/
+references
