@@ -1,67 +1,124 @@
+# AUTO-GENERATED from agents.yaml - do not edit by hand.
 services:
-
   spire-init:
     image: alpine:3.19
-    command: ["chown", "-R", "1000:1000", "/opt/spire/data/server", "/tmp/spire-server/private"]
+    command:
+      - sh
+      - -c
+      - chown -R 1000:1000 /opt/spire/data/server /opt/spire/data/agent /tmp/spire-server/private /tmp/spire-agent/public
     volumes:
       - spire-server-data:/opt/spire/data/server
+      - spire-agent-data:/opt/spire/data/agent
       - spire-server-socket:/tmp/spire-server/private
-
+      - spire-agent-socket:/tmp/spire-agent/public
   spire-server:
     image: ghcr.io/spiffe/spire-server:1.14.4
     depends_on:
       spire-init:
         condition: service_completed_successfully
-    command: ["-config", "/opt/spire/conf/server/server.conf"]
+    command:
+      - -config
+      - /opt/spire/conf/server/server.conf
     hostname: spire-server
     ports:
-      - "8081:8081"
+      - target: 8081
+        published: 8081
+        protocol: tcp
+        mode: ingress
     volumes:
       - ./spire/server.conf:/opt/spire/conf/server/server.conf:ro
-      - ./spire/x509pop/ca.crt:/opt/spire/conf/server/x509pop-ca.crt:ro 
+      - ./spire/x509pop/ca.crt:/opt/spire/conf/server/x509pop-ca.crt:ro
       - spire-server-data:/opt/spire/data/server
       - spire-server-socket:/tmp/spire-server/private
-
   spire-agent:
     image: ghcr.io/spiffe/spire-agent:1.14.4
     hostname: spire-agent
-    pid: "host"
-    command: ["-config", "/opt/spire/conf/agent/agent.conf"]
+    pid: host
+    command:
+      - -config
+      - /opt/spire/conf/agent/agent.conf
     volumes:
       - ./spire/agent.conf:/opt/spire/conf/agent/agent.conf:ro
+      - ./spire/bootstrap.crt:/opt/spire/conf/agent/bootstrap.crt:ro
       - ./spire/x509pop/agent.crt:/etc/spire/agent.crt:ro
-      - ./spire/x509pop/agent.key:/etc/spire/agent.key:ro                             
+      - ./spire/x509pop/agent.key:/etc/spire/agent.key:ro
       - spire-agent-data:/opt/spire/data/agent
-      - ${SVID_HOST_DIR}:/svid   
+      - spire-agent-socket:/tmp/spire-agent/public
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       - spire-server
-
-  attestor:
-    build: .
+  manager:
+    build:
+      context: .
+      args:
+        UID: '1000'
+        GID: '1000'
+        USERNAME: manager
+    image: agentic-identity/agent:manager
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      role: manager
     volumes:
-      - spire-agent-socket:/tmp/spire-agent/public:ro
-      - ./svid:/svid
-      - ./attest:/attest
+      - spire-agent-socket:/tmp/spire-agent/public
+      - ./src:/app/src
+      - /app/.venv
     environment:
-      
-      SPIFFE_ENDPOINT_SOCKET: ${SPIFFE_ENDPOINT_SOCKET} 
-      SVID_DIR: ${SVID_CONTAINER_DIR}
-      ATTEST_DIR: ${ATTEST_CONTAINER_DIR}
-      MODEL_ID: ${MODEL_ID}
-      MODEL_VERSION: ${MODEL_VERSION}
-      SYSTEM_PROMPT: ${SYSTEM_PROMPT}
-      TOOLS_JSON: ${TOOLS_JSON}
-      POLICY_VERSION: ${POLICY_VERSION}
-      ATTEST_INTERVAL_SECONDS: ${ATTEST_INTERVAL_SECONDS}
-      TARGET_URL: ${TARGET_URL}
-      LOG_LEVEL: ${LOG_LEVEL}
-    depends_on:
-      spire-agent:
-          condition: service_started
-
+      SPIFFE_ENDPOINT_SOCKET: ${SPIFFE_ENDPOINT_SOCKET}
+      LISTEN_HOST: 0.0.0.0
+      LISTEN_PORT: '8443'
+      MODEL_ID: claude-sonnet-4
+      MODEL_VERSION: '2026-01-01'
+      SYSTEM_PROMPT: You are the manager. Delegate to workers.
+      TOOLS_JSON: '[]'
+      POLICY_VERSION: v1
+      ATTEST_INTERVAL_SECONDS: '30'
+      TARGET_URL: ''
+      LOG_LEVEL: debug
+      HOME: /home/manager
+      AGENT_ID: spiffe://acme.test/manager
+      PEERS: '[{"id": "spiffe://acme.test/worker", "host": "worker", "port": 8443}]'
+  worker:
+    build:
+      context: .
+      args:
+        UID: '1001'
+        GID: '1001'
+        USERNAME: worker
+    image: agentic-identity/agent:worker
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      role: worker
+    volumes:
+      - spire-agent-socket:/tmp/spire-agent/public
+      - ./src:/app/src
+      - /app/.venv
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: ${SPIFFE_ENDPOINT_SOCKET}
+      LISTEN_HOST: 0.0.0.0
+      LISTEN_PORT: '8443'
+      MODEL_ID: claude-sonnet-4
+      MODEL_VERSION: '2026-01-01'
+      SYSTEM_PROMPT: You are a helpful agent.
+      TOOLS_JSON: '[]'
+      POLICY_VERSION: v1
+      ATTEST_INTERVAL_SECONDS: '30'
+      TARGET_URL: ''
+      LOG_LEVEL: info
+      HOME: /home/worker
+      AGENT_ID: spiffe://acme.test/worker
+      PEERS: '[{"id": "spiffe://acme.test/manager", "host": "manager", "port": 8443}]'
 volumes:
   spire-server-data:
+    name: spire-server-data
   spire-server-socket:
+    name: spire-server-socket
   spire-agent-socket:
+    name: spire-agent-socket
   spire-agent-data:
-  
+    name: spire-agent-data

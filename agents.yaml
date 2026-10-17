@@ -1,0 +1,25 @@
+trust_domain: acme.test
+
+defaults:
+  ttl: 60          # seconds; 1 hour
+  model_id: claude-sonnet-4
+  model_version: "2026-01-01"
+  system_prompt: "You are a helpful agent."
+  tools_json: '[]'
+  policy_version: v1
+  attest_interval_seconds: 30
+  target_url: ""
+  log_level: info
+
+agents:
+  manager:
+    uid: 1000
+    role: manager
+    peers: [worker]
+    log_level: debug
+    system_prompt: "You are the manager. Delegate to workers."
+
+  worker:
+    uid: 1001
+    role: worker
+    peers: [manager]
